@@ -98,7 +98,7 @@ namespace NzbDrone.Core.Indexers.Qobuz
 
             // Size estimates: raw PCM bitrate / 8 for bytes, with FLAC compression factor applied.
             // FLAC Lossless is always CD quality (16-bit/44.1kHz). Hi-Res uses actual album specs.
-            const double flacCompressionFactor = 0.6;
+            const double flacCompressionFactor = 0.7;
             double bitsPerSecond = bitrate switch
             {
                 AudioQuality.MP3320 => 320_000,
