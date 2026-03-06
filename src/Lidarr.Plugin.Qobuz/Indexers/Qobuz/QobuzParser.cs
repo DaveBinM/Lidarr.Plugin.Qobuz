@@ -96,24 +96,30 @@ namespace NzbDrone.Core.Indexers.Qobuz
                     throw new NotImplementedException();
             }
 
-            // estimates as there isn't an efficient way to get sizes
-            var size = 0L;
-            var bps = bitrate switch
+            // Size estimates: raw PCM bitrate / 8 for bytes, with FLAC compression factor applied.
+            // FLAC Lossless is always CD quality (16-bit/44.1kHz). Hi-Res uses actual album specs.
+            const double flacCompressionFactor = 0.6;
+            double bitsPerSecond = bitrate switch
             {
-                AudioQuality.MP3320 => 320000,
-                AudioQuality.FLACLossless => 1411200,
-                AudioQuality.FLACHiRes24Bit96kHz => 4608000,
-                AudioQuality.FLACHiRes24Bit192Khz => 9216000,
-                _ => 320000
+                AudioQuality.MP3320 => 320_000,
+                AudioQuality.FLACLossless => 16.0 * 44_100 * 2,
+                AudioQuality.FLACHiRes24Bit96kHz or AudioQuality.FLACHiRes24Bit192Khz =>
+                    (x.MaximumBitDepth ?? 24) * ((x.MaximumSamplingRate ?? 96) * 1000) * (x.MaximumChannelCount ?? 2),
+                _ => 320_000
             };
-            size = x.Duration.Value * bps;
+            double compressionFactor = bitrate == AudioQuality.MP3320 ? 1.0 : flacCompressionFactor;
+            result.Size = (long)(x.Duration.Value * bitsPerSecond / 8 * compressionFactor);
 
-            result.Size = size;
             result.Title = $"{x.Artist.Name} - {x.CompleteTitle}";
 
             if (year > 0)
             {
                 result.Title += $" ({year})";
+            }
+
+            if (!string.IsNullOrEmpty(x.ReleaseType))
+            {
+                result.Title += $" [{x.ReleaseType}]";
             }
 
             if (x.ParentalWarning.GetValueOrDefault())
