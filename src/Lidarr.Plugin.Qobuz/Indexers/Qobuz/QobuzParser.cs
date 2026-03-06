@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using Newtonsoft.Json.Linq;
+using NLog;
 using NzbDrone.Common.Http;
 using NzbDrone.Core.Parser.Model;
 using NzbDrone.Plugin.Qobuz.API;
@@ -13,11 +14,14 @@ namespace NzbDrone.Core.Indexers.Qobuz
     public class QobuzParser : IParseIndexerResponse
     {
         public QobuzIndexerSettings Settings { get; set; }
+        public Logger Logger { get; set; }
 
         public IList<ReleaseInfo> ParseResponse(IndexerResponse response)
         {
             var torrentInfos = new List<ReleaseInfo>();
             var content = new HttpResponse<SearchResult>(response.HttpResponse).Content;
+
+            Logger?.Debug("Qobuz raw search response: {0}", content);
 
             var jsonResponse = JObject.Parse(content).ToObject<SearchResult>();
             var releases = jsonResponse.Albums.Items.Select(result => ProcessAlbumResult(result)).ToArray();

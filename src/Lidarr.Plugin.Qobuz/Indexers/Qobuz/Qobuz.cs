@@ -58,7 +58,8 @@ namespace NzbDrone.Core.Indexers.Qobuz
         {
             return new QobuzParser()
             {
-                Settings = Settings
+                Settings = Settings,
+                Logger = _logger
             };
         }
     }
