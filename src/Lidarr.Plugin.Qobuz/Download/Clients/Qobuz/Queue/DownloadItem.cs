@@ -9,6 +9,7 @@ using NLog;
 using NzbDrone.Core.Parser.Model;
 using NzbDrone.Core.Plugins;
 using NzbDrone.Plugin.Qobuz.API;
+using QobuzApiSharp.Exceptions;
 using QobuzApiSharp.Models.Content;
 
 namespace NzbDrone.Core.Download.Clients.Qobuz.Queue
@@ -91,10 +92,14 @@ namespace NzbDrone.Core.Download.Clients.Qobuz.Queue
                         logger.Warn("Qobuz track {0} timed out or was unexpectedly cancelled: {1}", trackId, ex.Message);
                         FailedTracks++;
                     }
+                    catch (ApiErrorResponseException ex)
+                    {
+                        logger.Error("Error while downloading Qobuz track {0}: [{1}] {2} - {3}", trackId, ex.ResponseStatusCode, ex.ResponseStatus, ex.ResponseReason);
+                        FailedTracks++;
+                    }
                     catch (Exception ex)
                     {
-                        logger.Error("Error while downloading Qobuz track " + trackId);
-                        logger.Error(ex.ToString());
+                        logger.Error("Error while downloading Qobuz track {0}: {1}", trackId, ex.Message);
                         FailedTracks++;
                     }
                     finally
