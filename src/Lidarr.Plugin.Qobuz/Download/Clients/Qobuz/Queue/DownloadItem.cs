@@ -85,7 +85,12 @@ namespace NzbDrone.Core.Download.Clients.Qobuz.Queue
                         await DoTrackDownload(trackId, settings, cancellation);
                         DownloadedSize++;
                     }
-                    catch (TaskCanceledException) { }
+                    catch (TaskCanceledException) when (cancellation.IsCancellationRequested) { }
+                    catch (TaskCanceledException ex)
+                    {
+                        logger.Warn("Qobuz track {0} timed out or was unexpectedly cancelled: {1}", trackId, ex.Message);
+                        FailedTracks++;
+                    }
                     catch (Exception ex)
                     {
                         logger.Error("Error while downloading Qobuz track " + trackId);
@@ -100,8 +105,11 @@ namespace NzbDrone.Core.Download.Clients.Qobuz.Queue
             }
 
             await Task.WhenAll(tasks);
-            if (FailedTracks > 0)
+            if (FailedTracks > 0 || DownloadedSize < _tracks.Length)
+            {
+                logger.Warn("Qobuz download incomplete: {0}/{1} tracks downloaded, {2} failed.", DownloadedSize, _tracks.Length, FailedTracks);
                 Status = DownloadItemStatus.Failed;
+            }
             else
                 Status = DownloadItemStatus.Completed;
         }
