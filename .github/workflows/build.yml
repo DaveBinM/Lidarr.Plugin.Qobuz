@@ -33,7 +33,7 @@ jobs:
         with:
           submodules: true
           fetch-depth: 0
-          tags: true
+          fetch-tags: true
       - name: Setup .NET Core
         uses: actions/setup-dotnet@v4
         with:
