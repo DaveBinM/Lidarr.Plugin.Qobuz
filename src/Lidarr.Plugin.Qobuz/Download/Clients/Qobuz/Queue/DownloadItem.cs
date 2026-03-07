@@ -67,6 +67,7 @@ namespace NzbDrone.Core.Download.Clients.Qobuz.Queue
         public long TotalSize { get; private set; }
 
         public int FailedTracks { get; private set; }
+        public int SkippedTracks { get; private set; }
 
         private string[] _tracks;
         private QobuzURL _qobuzUrl;
@@ -92,6 +93,11 @@ namespace NzbDrone.Core.Download.Clients.Qobuz.Queue
                         logger.Warn("Qobuz track {0} timed out or was unexpectedly cancelled: {1}", trackId, ex.Message);
                         FailedTracks++;
                     }
+                    catch (ApiErrorResponseException ex) when (ex.ResponseStatusCode == "404")
+                    {
+                        logger.Warn("Qobuz track {0} is not available individually (404) and will be skipped.", trackId);
+                        SkippedTracks++;
+                    }
                     catch (ApiErrorResponseException ex)
                     {
                         logger.Error("Error while downloading Qobuz track {0}: [{1}] {2} - {3}", trackId, ex.ResponseStatusCode, ex.ResponseStatus, ex.ResponseReason);
@@ -110,13 +116,17 @@ namespace NzbDrone.Core.Download.Clients.Qobuz.Queue
             }
 
             await Task.WhenAll(tasks);
-            if (FailedTracks > 0 || DownloadedSize < _tracks.Length)
+            if (FailedTracks > 0 || DownloadedSize + SkippedTracks < _tracks.Length)
             {
-                logger.Warn("Qobuz download incomplete: {0}/{1} tracks downloaded, {2} failed.", DownloadedSize, _tracks.Length, FailedTracks);
+                logger.Warn("Qobuz download incomplete: {0}/{1} tracks downloaded, {2} failed, {3} skipped.", DownloadedSize, _tracks.Length, FailedTracks, SkippedTracks);
                 Status = DownloadItemStatus.Failed;
             }
             else
+            {
+                if (SkippedTracks > 0)
+                    logger.Warn("Qobuz download completed with {0} skipped track(s) not available individually.", SkippedTracks);
                 Status = DownloadItemStatus.Completed;
+            }
         }
 
         private async Task DoTrackDownload(string track, QobuzSettings settings, CancellationToken cancellation = default)
