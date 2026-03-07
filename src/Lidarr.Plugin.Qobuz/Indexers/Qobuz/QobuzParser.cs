@@ -68,8 +68,9 @@ namespace NzbDrone.Core.Indexers.Qobuz
 
             if ((result.Hires ?? false) && (result.HiresStreamable ?? false))
             {
-                qualityList.Add(AudioQuality.FLACHiRes24Bit192Khz);
                 qualityList.Add(AudioQuality.FLACHiRes24Bit96kHz);
+                if ((result.MaximumSamplingRate ?? 0) > 96)
+                    qualityList.Add(AudioQuality.FLACHiRes24Bit192Khz);
             }
 
             releaseTypes.TryGetValue(result.Id, out var releaseType);
@@ -127,14 +128,17 @@ namespace NzbDrone.Core.Indexers.Qobuz
             }
 
             // Size estimates: raw PCM bitrate / 8 for bytes, with FLAC compression factor applied.
-            // FLAC Lossless is always CD quality (16-bit/44.1kHz). Hi-Res uses actual album specs.
+            // FLAC Lossless is always CD quality (16-bit/44.1kHz). Hi-Res uses actual album specs,
+            // capped at the tier's maximum sampling rate.
             const double flacCompressionFactor = 0.7;
             double bitsPerSecond = bitrate switch
             {
                 AudioQuality.MP3320 => 320_000,
                 AudioQuality.FLACLossless => 16.0 * 44_100 * 2,
-                AudioQuality.FLACHiRes24Bit96kHz or AudioQuality.FLACHiRes24Bit192Khz =>
-                    (x.MaximumBitDepth ?? 24) * ((x.MaximumSamplingRate ?? 96) * 1000) * (x.MaximumChannelCount ?? 2),
+                AudioQuality.FLACHiRes24Bit96kHz =>
+                    (x.MaximumBitDepth ?? 24) * (Math.Min(x.MaximumSamplingRate ?? 96, 96) * 1000) * (x.MaximumChannelCount ?? 2),
+                AudioQuality.FLACHiRes24Bit192Khz =>
+                    (x.MaximumBitDepth ?? 24) * ((x.MaximumSamplingRate ?? 192) * 1000) * (x.MaximumChannelCount ?? 2),
                 _ => 320_000
             };
             double compressionFactor = bitrate == AudioQuality.MP3320 ? 1.0 : flacCompressionFactor;
