@@ -26,7 +26,7 @@ namespace NzbDrone.Core.Indexers.Qobuz
             var jsonResponse = JObject.Parse(content).ToObject<SearchResult>();
             var allAlbums = jsonResponse.Albums.Items;
 
-            var releaseTypes = FetchReleaseTypes(allAlbums.Take(5).ToList());
+            var releaseTypes = FetchReleaseTypes(allAlbums.Take(10).ToList());
 
             var releases = allAlbums.Select(result => ProcessAlbumResult(result, releaseTypes)).ToArray();
 
