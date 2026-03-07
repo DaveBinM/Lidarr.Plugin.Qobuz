@@ -24,7 +24,11 @@ namespace NzbDrone.Core.Indexers.Qobuz
             Logger?.Debug("Qobuz raw search response: {0}", content);
 
             var jsonResponse = JObject.Parse(content).ToObject<SearchResult>();
-            var releases = jsonResponse.Albums.Items.Select(result => ProcessAlbumResult(result)).ToArray();
+            var allAlbums = jsonResponse.Albums.Items;
+
+            var releaseTypes = FetchReleaseTypes(allAlbums.Take(5).ToList());
+
+            var releases = allAlbums.Select(result => ProcessAlbumResult(result, releaseTypes)).ToArray();
 
             foreach (var task in releases)
             {
@@ -36,7 +40,28 @@ namespace NzbDrone.Core.Indexers.Qobuz
                 .ToArray();
         }
 
-        private IEnumerable<ReleaseInfo> ProcessAlbumResult(Album result)
+        private Dictionary<string, string> FetchReleaseTypes(List<Album> albums)
+        {
+            var result = new Dictionary<string, string>();
+            var rng = new Random();
+            foreach (var a in albums)
+            {
+                try
+                {
+                    var detail = QobuzAPI.Instance?.Client?.GetAlbum(a.Id);
+                    if (detail?.ReleaseType != null)
+                        result[a.Id] = detail.ReleaseType;
+                }
+                catch (Exception ex)
+                {
+                    Logger?.Warn("Failed to fetch Qobuz album detail for {0}: {1}", a.Id, ex.Message);
+                }
+                Task.Delay(rng.Next(300, 800)).Wait();
+            }
+            return result;
+        }
+
+        private IEnumerable<ReleaseInfo> ProcessAlbumResult(Album result, Dictionary<string, string> releaseTypes)
         {
             // determine available audio qualities
             List<AudioQuality> qualityList = new() { AudioQuality.MP3320, AudioQuality.FLACLossless };
@@ -47,10 +72,11 @@ namespace NzbDrone.Core.Indexers.Qobuz
                 qualityList.Add(AudioQuality.FLACHiRes24Bit96kHz);
             }
 
-            return qualityList.Select(q => ToReleaseInfo(result, q));
+            releaseTypes.TryGetValue(result.Id, out var releaseType);
+            return qualityList.Select(q => ToReleaseInfo(result, q, releaseType));
         }
 
-        private static ReleaseInfo ToReleaseInfo(Album x, AudioQuality bitrate)
+        private static ReleaseInfo ToReleaseInfo(Album x, AudioQuality bitrate, string releaseType)
         {
             var publishDate = DateTime.UtcNow;
             var year = 0;
@@ -121,9 +147,9 @@ namespace NzbDrone.Core.Indexers.Qobuz
                 result.Title += $" ({year})";
             }
 
-            if (!string.IsNullOrEmpty(x.ReleaseType))
+            if (!string.IsNullOrEmpty(releaseType))
             {
-                result.Title += $" [{x.ReleaseType}]";
+                result.Title += $" [{releaseType}]";
             }
 
             if (x.ParentalWarning.GetValueOrDefault())
