@@ -21,7 +21,7 @@ namespace NzbDrone.Core.Indexers.Qobuz
             var torrentInfos = new List<ReleaseInfo>();
             var content = new HttpResponse<SearchResult>(response.HttpResponse).Content;
 
-            Logger?.Debug("Qobuz raw search response: {0}", content);
+            // Logger?.Debug("Qobuz raw search response: {0}", content);
 
             var jsonResponse = JObject.Parse(content).ToObject<SearchResult>();
             var allAlbums = jsonResponse.Albums.Items;
