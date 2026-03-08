@@ -36,9 +36,18 @@ namespace NzbDrone.Core.Indexers.Qobuz
             }
 
             return torrentInfos
-                .OrderByDescending(o => o.Size)
+                .OrderBy(o => QualityPriority(o))
+                .ThenBy(o => o.Size)
                 .ToArray();
         }
+
+        private static int QualityPriority(ReleaseInfo r) => r.Container switch
+        {
+            "Lossless"    => 0,
+            "24bit 96kHz" => 1,
+            "24bit 192kHz" => 2,
+            _              => 3  // MP3
+        };
 
         private Dictionary<string, string> FetchReleaseTypes(List<Album> albums)
         {
