@@ -13,6 +13,8 @@ namespace NzbDrone.Core.ImportLists.Qobuz
 {
     public class QobuzPlaylistImportList : ImportListBase<QobuzPlaylistSettings>
     {
+        private const int PageSize = 500;
+
         public override string Name => "Qobuz Playlist";
         public override ImportListType ListType => ImportListType.Other;
         public override TimeSpan MinRefreshInterval => TimeSpan.FromHours(12);
@@ -41,21 +43,31 @@ namespace NzbDrone.Core.ImportLists.Qobuz
             {
                 try
                 {
-                    var playlist = QobuzAPI.Instance?.Client?.GetPlaylist(playlistId, extra: "tracks", limit: 500);
-                    if (playlist?.Tracks?.Items == null)
+                    var offset = 0;
+                    int total;
+                    do
                     {
-                        _logger.Warn("Qobuz playlist {0} returned no tracks", playlistId);
-                        continue;
-                    }
+                        var playlist = QobuzAPI.Instance?.Client?.GetPlaylist(playlistId, extra: "tracks", limit: PageSize, offset: offset);
+                        if (playlist?.Tracks?.Items == null)
+                        {
+                            if (offset == 0)
+                                _logger.Warn("Qobuz playlist {0} returned no tracks", playlistId);
+                            break;
+                        }
 
-                    foreach (var track in playlist.Tracks.Items)
-                    {
-                        var artistName = track.Album?.Artist?.Name ?? track.Performer?.Name;
-                        if (string.IsNullOrWhiteSpace(artistName))
-                            continue;
+                        foreach (var track in playlist.Tracks.Items)
+                        {
+                            var artistName = track.Album?.Artist?.Name ?? track.Performer?.Name;
+                            if (string.IsNullOrWhiteSpace(artistName))
+                                continue;
 
-                        items.Add(new ImportListItemInfo { Artist = artistName });
+                            items.Add(new ImportListItemInfo { Artist = artistName });
+                        }
+
+                        total = playlist.Tracks.Total ?? 0;
+                        offset += playlist.Tracks.Items.Count;
                     }
+                    while (offset < total);
                 }
                 catch (Exception ex)
                 {
