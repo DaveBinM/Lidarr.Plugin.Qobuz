@@ -31,15 +31,10 @@ namespace NzbDrone.Core.ImportLists.Qobuz
         {
             var items = new List<ImportListItemInfo>();
 
-            if (string.IsNullOrWhiteSpace(Settings.PlaylistIds))
+            if (Settings.PlaylistIds == null || !Settings.PlaylistIds.Any())
                 return items;
 
-            var playlistIds = Settings.PlaylistIds
-                .Split(',')
-                .Select(id => id.Trim())
-                .Where(id => !string.IsNullOrEmpty(id));
-
-            foreach (var playlistId in playlistIds)
+            foreach (var playlistId in Settings.PlaylistIds)
             {
                 try
                 {
@@ -80,13 +75,13 @@ namespace NzbDrone.Core.ImportLists.Qobuz
 
         protected override void Test(List<ValidationFailure> failures)
         {
-            if (string.IsNullOrWhiteSpace(Settings.PlaylistIds))
+            if (Settings.PlaylistIds == null || !Settings.PlaylistIds.Any())
             {
                 failures.Add(new ValidationFailure("PlaylistIds", "At least one playlist ID is required"));
                 return;
             }
 
-            var firstId = Settings.PlaylistIds.Split(',').First().Trim();
+            var firstId = Settings.PlaylistIds.First();
             try
             {
                 var playlist = QobuzAPI.Instance?.Client?.GetPlaylist(firstId, extra: "tracks", limit: 1);
