@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using Newtonsoft.Json.Linq;
 using NLog;
@@ -86,6 +87,22 @@ namespace NzbDrone.Core.Indexers.Qobuz
             return qualityList.Select(q => ToReleaseInfo(result, q, releaseType));
         }
 
+        // Qobuz returns album URLs with its default "fr-fr" locale; rewrite it to the signed-in
+        // account's locale (e.g. "au-en") so Lidarr's info link opens the right storefront. The
+        // download only needs the album ID parsed out of this URL, so this is purely cosmetic.
+        private static string LocalizeUrl(string url)
+        {
+            if (string.IsNullOrEmpty(url))
+                return url;
+
+            var user = QobuzAPI.Instance?.Login?.User;
+            if (string.IsNullOrEmpty(user?.CountryCode) || string.IsNullOrEmpty(user?.LanguageCode))
+                return url;
+
+            var locale = $"{user.CountryCode}-{user.LanguageCode}".ToLowerInvariant();
+            return Regex.Replace(url, @"(qobuz\.com/)[a-z]{2}-[a-z]{2}/", $"$1{locale}/", RegexOptions.IgnoreCase);
+        }
+
         private static ReleaseInfo ToReleaseInfo(Album x, AudioQuality bitrate, string releaseType)
         {
             var publishDate = DateTime.UtcNow;
@@ -96,7 +113,7 @@ namespace NzbDrone.Core.Indexers.Qobuz
                 year = publishDate.Year;
             }
 
-            var url = x.Url;
+            var url = LocalizeUrl(x.Url);
 
             var result = new ReleaseInfo
             {
