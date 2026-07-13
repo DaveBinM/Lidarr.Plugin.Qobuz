@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Text.RegularExpressions;
 using NLog;
 using NzbDrone.Common.Http;
 using NzbDrone.Core.IndexerSearch.Definitions;
@@ -11,6 +12,21 @@ namespace NzbDrone.Core.Indexers.Qobuz
     {
         private const int PageSize = 100;
         private const int MaxPages = 15;
+
+        // Tier-2 fallback cleaning (see GetSearchRequests). Qobuz's /album/search is token-AND, so a
+        // bracketed group or a trailing edition/soundtrack qualifier that Qobuz doesn't carry in its
+        // own title drops the result to zero. These strip that noise back to the core title.
+        private static readonly Regex BracketedGroups = new Regex(@"\s*[\(\[][^\)\]]*[\)\]]", RegexOptions.Compiled);
+        private static readonly Regex TrailingQualifier = new Regex(
+            @"\s*[:\-–—]?\s*\b(?:" +
+            @"(?:original\s+)?(?:motion\s+picture\s+)?(?:sound\s?tracks?|score)" +
+            @"|OST" +
+            @"|(?:\d+(?:st|nd|rd|th)?\s+)?anniversary\s+edition" +
+            @"|special\s+edition" +
+            @"|deluxe|expanded|remaster\w*|bonus\s+track\w*|EP|single" +
+            @")\b.*$",
+            RegexOptions.IgnoreCase | RegexOptions.Singleline | RegexOptions.Compiled);
+
         public QobuzIndexerSettings Settings { get; set; }
         public Logger Logger { get; set; }
 
@@ -27,9 +43,48 @@ namespace NzbDrone.Core.Indexers.Qobuz
         {
             var chain = new IndexerPageableRequestChain();
 
-            chain.AddTier(GetRequests($"{searchCriteria.ArtistQuery} {searchCriteria.AlbumQuery}"));
+            // Tier 1: the raw artist + album query. This is what already works for the vast majority
+            // of searches, so it stays first and unchanged (HttpIndexerBase advances to the next tier
+            // only when the current one returns nothing).
+            var tier1 = $"{searchCriteria.ArtistQuery} {searchCriteria.AlbumQuery}";
+            chain.AddTier(GetRequests(tier1));
+
+            // Tier 2 (fallback, reached only when Tier 1 returns nothing): clean punctuation/accents
+            // and strip trailing edition/soundtrack qualifiers so the core title survives Qobuz's
+            // token-AND matching (e.g. MB "Batman: Original Motion Picture Score" -> "Batman", which
+            // Qobuz lists as "Batman (Original Motion Picture Soundtrack)"). Added only when it
+            // actually differs from Tier 1, to avoid issuing a redundant identical request.
+            if (!string.IsNullOrWhiteSpace(searchCriteria.AlbumTitle) &&
+                !string.IsNullOrWhiteSpace(searchCriteria.ArtistQuery))
+            {
+                var artist = searchCriteria.CleanArtistQuery.Replace('+', ' ');
+                var album = SearchCriteriaBase.GetQueryTitle(StripQualifiers(searchCriteria.AlbumTitle)).Replace('+', ' ');
+                var tier2 = $"{artist} {album}";
+
+                if (!string.Equals(tier2, tier1, StringComparison.OrdinalIgnoreCase))
+                {
+                    chain.AddTier(GetRequests(tier2));
+                }
+            }
 
             return chain;
+        }
+
+        // Reduces a MusicBrainz album title to its core so it survives Qobuz's token-AND search:
+        // drops bracketed groups and any trailing edition/soundtrack/remaster qualifier. Returns the
+        // original title if stripping would leave nothing (e.g. an album literally named "Deluxe").
+        private static string StripQualifiers(string title)
+        {
+            if (string.IsNullOrWhiteSpace(title))
+            {
+                return title;
+            }
+
+            var stripped = BracketedGroups.Replace(title, string.Empty);
+            stripped = TrailingQualifier.Replace(stripped, string.Empty);
+            stripped = Regex.Replace(stripped, @"\s{2,}", " ").Trim(' ', ':', '-', '–', '—');
+
+            return string.IsNullOrWhiteSpace(stripped) ? title : stripped;
         }
 
         public IndexerPageableRequestChain GetSearchRequests(ArtistSearchCriteria searchCriteria)

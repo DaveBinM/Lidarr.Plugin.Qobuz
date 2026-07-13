@@ -149,3 +149,6 @@ _temp_*/**/*
 ## Merge any idea folder
 */**/.idea
 *.iml
+
+# Local Qobuz credentials used for dev/testing (User ID + Auth Token) - never commit
+AuthDetails
