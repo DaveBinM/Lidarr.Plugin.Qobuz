@@ -8,9 +8,11 @@ using NzbDrone.Common.Disk;
 using NzbDrone.Common.Extensions;
 using NzbDrone.Common.Processes;
 using NzbDrone.Core.Download.Clients.Qobuz.Queue;
+using NzbDrone.Core.Exceptions;
 using NzbDrone.Core.Parser;
 using NzbDrone.Core.Parser.Model;
 using NzbDrone.Plugin.Qobuz.API;
+using QobuzApiSharp.Exceptions;
 
 namespace NzbDrone.Core.Download.Clients.Qobuz
 {
@@ -66,7 +68,23 @@ namespace NzbDrone.Core.Download.Clients.Qobuz
         {
             _taskQueue.SetSettings(settings);
 
-            var downloadItem = await DownloadItem.From(remoteAlbum);
+            DownloadItem downloadItem;
+            try
+            {
+                downloadItem = await DownloadItem.From(remoteAlbum);
+            }
+            catch (ApiErrorResponseException ex)
+            {
+                // Qobuz couldn't provide the album's data (e.g. it's unavailable in this region). Fail the
+                // grab cleanly as a ReleaseDownloadException so Lidarr logs an error and returns 409 rather
+                // than letting the raw exception bubble up as a 500 Fatal.
+                throw new ReleaseDownloadException(remoteAlbum.Release, $"Qobuz could not provide data for '{remoteAlbum.Release.Title}'; it may be unavailable in your region.", ex);
+            }
+            catch (Exception ex)
+            {
+                throw new ReleaseDownloadException(remoteAlbum.Release, $"Failed to prepare Qobuz download for '{remoteAlbum.Release.Title}'.", ex);
+            }
+
             await _taskQueue.QueueBackgroundWorkItemAsync(downloadItem);
             return downloadItem.ID;
         }

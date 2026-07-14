@@ -1,10 +1,15 @@
 using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Threading.Tasks;
 using NLog;
 using NzbDrone.Common.Cache;
 using NzbDrone.Common.Http;
 using NzbDrone.Core.Configuration;
 using NzbDrone.Core.Download.Clients.Qobuz;
+using NzbDrone.Core.IndexerSearch.Definitions;
 using NzbDrone.Core.Parser;
+using NzbDrone.Core.Parser.Model;
 using NzbDrone.Plugin.Qobuz.API;
 
 namespace NzbDrone.Core.Indexers.Qobuz
@@ -62,5 +67,42 @@ namespace NzbDrone.Core.Indexers.Qobuz
                 Logger = _logger
             };
         }
+
+        // Qobuz's /album/search tacks "Various Artists" compilations onto many specific-artist searches.
+        // They're irrelevant to such a search, and they are the sole trigger for an interactive-search 500:
+        // when the library holds two distinct "Various Artists" entries, Lidarr's ArtistRepository.FindByName
+        // throws MultipleArtistsFoundException on them, aborting the whole search. Drop them here unless the
+        // search itself is for Various Artists. Plain string check, no artist lookup; a search with no VA
+        // result is returned unchanged.
+        public override async Task<IList<ReleaseInfo>> Fetch(AlbumSearchCriteria searchCriteria)
+        {
+            return SkipVariousArtists(await base.Fetch(searchCriteria), searchCriteria.Artist?.Name);
+        }
+
+        public override async Task<IList<ReleaseInfo>> Fetch(ArtistSearchCriteria searchCriteria)
+        {
+            return SkipVariousArtists(await base.Fetch(searchCriteria), searchCriteria.Artist?.Name);
+        }
+
+        private IList<ReleaseInfo> SkipVariousArtists(IList<ReleaseInfo> releases, string searchedArtist)
+        {
+            if (releases.Count == 0 || IsVariousArtists(searchedArtist))
+            {
+                return releases;
+            }
+
+            var kept = releases.Where(r => !IsVariousArtists(r.Artist)).ToList();
+            if (kept.Count != releases.Count)
+            {
+                _logger.Debug("Qobuz: skipped {0} 'Various Artists' result(s) for search '{1}'", releases.Count - kept.Count, searchedArtist);
+            }
+
+            return kept;
+        }
+
+        private static bool IsVariousArtists(string artist)
+            => !string.IsNullOrWhiteSpace(artist)
+               && (artist.Trim().Equals("Various Artists", StringComparison.OrdinalIgnoreCase)
+                   || artist.Trim().Equals("VA", StringComparison.OrdinalIgnoreCase));
     }
 }
