@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Text.RegularExpressions;
 using NLog;
 using NzbDrone.Common.Http;
@@ -17,6 +18,14 @@ namespace NzbDrone.Core.Indexers.Qobuz
         // bracketed group or a trailing edition/soundtrack qualifier that Qobuz doesn't carry in its
         // own title drops the result to zero. These strip that noise back to the core title.
         private static readonly Regex BracketedGroups = new Regex(@"\s*[\(\[][^\)\]]*[\)\]]", RegexOptions.Compiled);
+
+        // A colon/dash subtitle that mentions soundtrack-type words is dropped wholesale: MB's
+        // "The Hack: Original Television Soundtrack" is just "The Hack" on Qobuz, and TrailingQualifier
+        // alone can't reach it ("Television" breaks its original/motion-picture/soundtrack prefix chain).
+        private static readonly Regex SubtitleQualifier = new Regex(
+            @"\s*[:\-–—]\s[^:]*\b(?:sound\s?tracks?|score|OST|music\s+from)\b.*$",
+            RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
         private static readonly Regex TrailingQualifier = new Regex(
             @"\s*[:\-–—]?\s*\b(?:" +
             @"(?:original\s+)?(?:motion\s+picture\s+)?(?:sound\s?tracks?|score)" +
@@ -57,17 +66,62 @@ namespace NzbDrone.Core.Indexers.Qobuz
             if (!string.IsNullOrWhiteSpace(searchCriteria.AlbumTitle) &&
                 !string.IsNullOrWhiteSpace(searchCriteria.ArtistQuery))
             {
-                var artist = searchCriteria.CleanArtistQuery.Replace('+', ' ');
-                var album = SearchCriteriaBase.GetQueryTitle(StripQualifiers(searchCriteria.AlbumTitle)).Replace('+', ' ');
+                var artist = CleanForTokenSearch(searchCriteria.CleanArtistQuery);
+                var album = CleanForTokenSearch(SearchCriteriaBase.GetQueryTitle(StripQualifiers(searchCriteria.AlbumTitle)));
                 var tier2 = $"{artist} {album}";
 
                 if (!string.Equals(tier2, tier1, StringComparison.OrdinalIgnoreCase))
                 {
                     chain.AddTier(GetRequests(tier2));
                 }
+
+                // Tier 3 (fallback for MB split-release titles like "A / B"): Qobuz often carries the
+                // halves as separate releases, so search each half. All halves share one tier, so their
+                // results come back together (HttpIndexerBase runs every request in a tier before its
+                // releases.Any() break). Lidarr's matching of a half against the combined MB album is
+                // best-effort, but returning the halves beats a guaranteed zero.
+                if (searchCriteria.AlbumTitle.Contains(" / "))
+                {
+                    var partQueries = searchCriteria.AlbumTitle
+                        .Split(new[] { " / " }, StringSplitOptions.RemoveEmptyEntries)
+                        .Select(part => CleanForTokenSearch(SearchCriteriaBase.GetQueryTitle(StripQualifiers(part))))
+                        .Where(part => !string.IsNullOrWhiteSpace(part))
+                        .Select(part => $"{artist} {part}")
+                        .Where(query => !string.Equals(query, tier1, StringComparison.OrdinalIgnoreCase) &&
+                                        !string.Equals(query, tier2, StringComparison.OrdinalIgnoreCase))
+                        .Distinct(StringComparer.OrdinalIgnoreCase)
+                        .ToList();
+
+                    for (var i = 0; i < partQueries.Count; i++)
+                    {
+                        if (i == 0)
+                        {
+                            chain.AddTier(GetRequests(partQueries[i]));
+                        }
+                        else
+                        {
+                            chain.Add(GetRequests(partQueries[i]));
+                        }
+                    }
+                }
             }
 
             return chain;
+        }
+
+        // Final cleanup of a GetQueryTitle result before sending it to Qobuz: '+' back to spaces
+        // (GetAPIUrl would encode a literal '+' as %2B), and apostrophes to spaces — Qobuz does not
+        // unify apostrophe variants attached to digits (MB "Birthday Blizzard ’26" is "‘26" on Qobuz,
+        // matched only by a bare "26"), while titles with real apostrophes still match without them.
+        private static string CleanForTokenSearch(string query)
+        {
+            if (string.IsNullOrWhiteSpace(query))
+            {
+                return query;
+            }
+
+            var cleaned = query.Replace('+', ' ').Replace('\'', ' ');
+            return Regex.Replace(cleaned, @"\s{2,}", " ").Trim();
         }
 
         // Reduces a MusicBrainz album title to its core so it survives Qobuz's token-AND search:
@@ -81,6 +135,7 @@ namespace NzbDrone.Core.Indexers.Qobuz
             }
 
             var stripped = BracketedGroups.Replace(title, string.Empty);
+            stripped = SubtitleQualifier.Replace(stripped, string.Empty);
             stripped = TrailingQualifier.Replace(stripped, string.Empty);
             stripped = Regex.Replace(stripped, @"\s{2,}", " ").Trim(' ', ':', '-', '–', '—');
 
