@@ -15,11 +15,76 @@ public class QobuzAPI
 {
     public static QobuzAPI Instance { get; private set; }
 
-    public static void Initialize(Logger logger, string appId, string appSecret, bool forceRecreate = false)
+    private static readonly object SignInLock = new();
+    private static readonly TimeSpan ValidationInterval = TimeSpan.FromMinutes(5);
+    private static string _settingsKey;
+    private static DateTime _lastValidated = DateTime.MinValue;
+
+    // Every search used to rebuild the static instance and sign in again — under token auth the old
+    // settings comparison never matched — so a concurrent search could see the half-built instance,
+    // find a null Login and fail with "Qobuz login failed", putting the indexer into backoff. Instead
+    // keep one signed-in instance per credential set, revalidate it at most every 5 minutes, and only
+    // sign in again when the settings change or that validation fails.
+    public static QobuzAPI EnsureSignedIn(QobuzIndexerSettings settings, Logger logger)
     {
-        if (Instance != null && !forceRecreate)
-            return;
-        Instance = new QobuzAPI(appId, appSecret);
+        lock (SignInLock)
+        {
+            var settingsKey = string.Join('|', settings.AppID, settings.AppSecret, settings.Email,
+                settings.MD5Password, settings.UserID, settings.UserAuthToken);
+
+            if (Instance == null || _settingsKey != settingsKey)
+            {
+                Instance = new QobuzAPI(settings.AppID, settings.AppSecret);
+                _settingsKey = settingsKey;
+                _lastValidated = DateTime.MinValue;
+            }
+
+            var api = Instance;
+
+            if (api._login != null && DateTime.UtcNow - _lastValidated > ValidationInterval)
+            {
+                if (IsSessionValid(api, logger))
+                {
+                    _lastValidated = DateTime.UtcNow;
+                }
+                else
+                {
+                    // PickSignInFromSettings swallows its own errors and leaves the stale Login in
+                    // place, so clear it here to force the fresh sign-in below.
+                    api._login = null;
+                }
+            }
+
+            for (var attempt = 0; api._login == null && attempt < 2; attempt++)
+            {
+                api.PickSignInFromSettings(settings, logger);
+
+                if (api._login != null)
+                {
+                    _lastValidated = DateTime.UtcNow;
+                }
+            }
+
+            if (api._login == null)
+            {
+                throw new Exception("Qobuz login failed, please check your credentials in the indexer settings.");
+            }
+
+            return api;
+        }
+    }
+
+    private static bool IsSessionValid(QobuzAPI api, Logger logger)
+    {
+        try
+        {
+            return api._client.IsAppSecretValid();
+        }
+        catch (Exception ex)
+        {
+            logger.Debug($"Qobuz session check failed, signing in again: {ex.Message}");
+            return false;
+        }
     }
 
     private QobuzAPI(string appId, string appSecret)

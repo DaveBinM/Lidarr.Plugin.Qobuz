@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 using Newtonsoft.Json.Linq;
 using NLog;
 using NzbDrone.Common.Http;
+using NzbDrone.Core.Parser;
 using NzbDrone.Core.Parser.Model;
 using NzbDrone.Plugin.Qobuz.API;
 using QobuzApiSharp.Models.Content;
@@ -14,6 +15,8 @@ namespace NzbDrone.Core.Indexers.Qobuz
 {
     public class QobuzParser : IParseIndexerResponse
     {
+        private const string MainArtistRole = "main-artist";
+
         public QobuzIndexerSettings Settings { get; set; }
         public Logger Logger { get; set; }
 
@@ -27,13 +30,30 @@ namespace NzbDrone.Core.Indexers.Qobuz
             var jsonResponse = JObject.Parse(content).ToObject<SearchResult>();
             var allAlbums = jsonResponse.Albums.Items;
 
-            var releaseTypes = FetchReleaseTypes(allAlbums.Take(10).ToList());
+            var request = response.Request as QobuzIndexerRequest;
+            var context = request?.Context;
+
+            // Release-type lookups are one API call plus a throttling sleep each, so they only run for
+            // the first page of a query and only for albums by the artist we searched for. A broad
+            // query used to spend ~10 s per page on albums Lidarr rejects as the wrong artist anyway,
+            // which is what pushed wide searches past Huntarr's 90 s limit.
+            var releaseTypes = request == null || request.Offset == 0
+                ? FetchReleaseTypes(SelectForReleaseTypeLookup(allAlbums, context))
+                : new Dictionary<string, string>();
 
             var releases = allAlbums.Select(result => ProcessAlbumResult(result, releaseTypes)).ToArray();
 
             foreach (var task in releases)
             {
                 torrentInfos.AddRange(task);
+            }
+
+            // Tell the request generator that this search is answered, so its gated fallback query
+            // doesn't run. Nothing is dropped here: IsFullPage counts what we return, so paging must
+            // see the full page.
+            if (context is { MatchFound: false } && allAlbums.Any(a => IsSearchedAlbum(a, context)))
+            {
+                context.MatchFound = true;
             }
 
             return torrentInfos
@@ -49,6 +69,48 @@ namespace NzbDrone.Core.Indexers.Qobuz
             "24bit 192kHz" => 2,
             _              => 3  // MP3
         };
+
+        // The album the search was actually for: same primary artist, same core title.
+        private static bool IsSearchedAlbum(Album album, QobuzSearchContext context)
+        {
+            if (string.IsNullOrEmpty(context.CoreTitle) || string.IsNullOrEmpty(context.ArtistCleanName))
+            {
+                return false;
+            }
+
+            return IsPrimaryArtist(album, context.ArtistCleanName) &&
+                   QobuzRequestGenerator.CoreKey(album.CompleteTitle) == context.CoreTitle;
+        }
+
+        private static bool IsPrimaryArtist(Album album, string artistCleanName)
+            => album.Artist?.Name != null && album.Artist.Name.CleanArtistName() == artistCleanName;
+
+        private static List<Album> SelectForReleaseTypeLookup(List<Album> albums, QobuzSearchContext context)
+        {
+            if (string.IsNullOrEmpty(context?.ArtistCleanName))
+            {
+                return albums.Take(10).ToList();
+            }
+
+            return albums
+                .Where(a => IsPrimaryArtist(a, context.ArtistCleanName) ||
+                            MainArtistsOf(a).Any(n => n.CleanArtistName() == context.ArtistCleanName))
+                .Take(10)
+                .ToList();
+        }
+
+        private static IEnumerable<string> MainArtistsOf(Album album)
+        {
+            if (album.Artists == null)
+            {
+                return Enumerable.Empty<string>();
+            }
+
+            return album.Artists
+                .Where(a => a?.Name != null && a.Roles != null &&
+                            a.Roles.Any(r => string.Equals(r, MainArtistRole, StringComparison.OrdinalIgnoreCase)))
+                .Select(a => a.Name);
+        }
 
         private Dictionary<string, string> FetchReleaseTypes(List<Album> albums)
         {
@@ -115,7 +177,7 @@ namespace NzbDrone.Core.Indexers.Qobuz
 
             var url = LocalizeUrl(x.Url);
 
-            var result = new ReleaseInfo
+            var result = new QobuzReleaseInfo
             {
                 Guid = $"Qobuz-{x.Id}-{bitrate}",
                 Artist = x.Artist.Name,
@@ -123,7 +185,8 @@ namespace NzbDrone.Core.Indexers.Qobuz
                 DownloadUrl = url,
                 InfoUrl = url,
                 PublishDate = publishDate,
-                DownloadProtocol = nameof(QobuzDownloadProtocol)
+                DownloadProtocol = nameof(QobuzDownloadProtocol),
+                MainArtists = MainArtistsOf(x).ToList()
             };
 
             string format;
