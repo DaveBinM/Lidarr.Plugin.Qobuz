@@ -53,11 +53,17 @@ namespace NzbDrone.Core.ImportLists.Qobuz
 
                         foreach (var track in playlist.Tracks.Items)
                         {
-                            var artistName = track.Album?.Artist?.Name ?? track.Performer?.Name;
-                            if (string.IsNullOrWhiteSpace(artistName))
+                            // Send the album too: Lidarr then pins the artist through that release (an
+                            // unmatched album adds nothing rather than a guessed artist), and a list set to
+                            // "Specific Album" monitors just that album instead of the whole discography.
+                            // A Various Artists compilation isn't the performer's own album, so those stay
+                            // artist-only, under the performer.
+                            var compilation = IsVariousArtists(track.Album?.Artist?.Name);
+                            var artistName = compilation ? track.Performer?.Name : track.Album?.Artist?.Name ?? track.Performer?.Name;
+                            if (string.IsNullOrWhiteSpace(artistName) || IsVariousArtists(artistName))
                                 continue;
 
-                            items.Add(new ImportListItemInfo { Artist = artistName });
+                            items.Add(new ImportListItemInfo { Artist = artistName, Album = compilation ? null : track.Album?.Title });
                         }
 
                         total = playlist.Tracks.Total ?? 0;
@@ -114,5 +120,10 @@ namespace NzbDrone.Core.ImportLists.Qobuz
             else if (unreachable.Any())
                 _logger.Warn("Some Qobuz playlists could not be fetched and will be skipped: {0}", string.Join(", ", unreachable));
         }
+
+        private static bool IsVariousArtists(string artist)
+            => !string.IsNullOrWhiteSpace(artist)
+               && (artist.Trim().Equals("Various Artists", StringComparison.OrdinalIgnoreCase)
+                   || artist.Trim().Equals("VA", StringComparison.OrdinalIgnoreCase));
     }
 }

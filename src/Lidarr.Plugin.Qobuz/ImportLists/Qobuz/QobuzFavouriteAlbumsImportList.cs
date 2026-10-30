@@ -46,7 +46,8 @@ namespace NzbDrone.Core.ImportLists.Qobuz
                         if (string.IsNullOrWhiteSpace(artistName))
                             continue;
 
-                        items.Add(new ImportListItemInfo { Artist = artistName });
+                        // With the album, Lidarr pins the artist through it and "Specific Album" monitoring works.
+                        items.Add(new ImportListItemInfo { Artist = artistName, Album = album.Title });
                     }
 
                     total = favourites.Albums.Total ?? 0;
