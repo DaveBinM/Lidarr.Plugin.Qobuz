@@ -8,6 +8,7 @@ namespace NzbDrone.Core.Indexers.Qobuz
     {
         public QobuzIndexerSettingsValidator()
         {
+            RuleFor(x => x.SearchRequestDelaySeconds).InclusiveBetween(0, 120);
         }
     }
 
@@ -35,6 +36,9 @@ namespace NzbDrone.Core.Indexers.Qobuz
 
         [FieldDefinition(6, Type = FieldType.Number, Label = "Early Download Limit", Unit = "days", HelpText = "Time before release date Lidarr will download from this indexer, empty is no limit", Advanced = true)]
         public int? EarlyReleaseLimit { get; set; }
+
+        [FieldDefinition(7, Type = FieldType.Number, Label = "Search Request Delay", Unit = "seconds", HelpText = "Minimum gap between Qobuz search requests (each page and each fallback query is one request). Lidarr's default for indexers is 2.")]
+        public int SearchRequestDelaySeconds { get; set; } = 3;
 
         // this is hardcoded so this doesn't need to exist except that it's required by the interface
         public string BaseUrl { get; set; } = "";

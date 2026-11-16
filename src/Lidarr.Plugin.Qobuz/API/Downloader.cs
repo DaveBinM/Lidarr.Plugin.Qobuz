@@ -81,10 +81,13 @@ public static class Downloader
         }
     }
 
-    public static async Task ApplyMetadataToFile(this QobuzApiService s, string trackId, string trackPath, byte[] albumArt, bool embedArt, string lyrics = "", CancellationToken token = default)
+    // Takes the track and album the caller already fetched: looking them up again here cost two
+    // extra API calls per track.
+    public static Task ApplyMetadataToFile(Track page, Album albumPage, string trackPath, byte[] albumArt, bool embedArt, string lyrics = "")
     {
         using TagLib.File file = TagLib.File.Create(trackPath);
-        await s.ApplyMetadataToTagLibFile(file, trackId, albumArt, embedArt, lyrics, token);
+        ApplyMetadataToTagLibFile(file, page, albumPage, albumArt, embedArt, lyrics);
+        return Task.CompletedTask;
     }
 
     public static async Task<(string? plainLyrics, string? syncLyrics)?> FetchLyricsFromLRCLIB(string instance, string trackName, string artistName, string albumName, long duration, CancellationToken token = default)
@@ -179,6 +182,7 @@ public static class Downloader
 
     private static async Task<HttpResponseMessage> GetTrackResponse(this QobuzApiService s, string trackId, AudioQuality bitrate, CancellationToken token = default)
     {
+        await QobuzThrottle.WaitAsync(token);
         var urls = (s.GetTrackFileUrl(trackId, ((int)bitrate).ToString())) ?? throw new Exception($"Track ID {trackId} has no available media sources for bitrate {bitrate}.");
         if (urls.Sample ?? false)
             throw new Exception("Qobuz provided a sample. The user probably does not have access to this quality of track.");
@@ -194,10 +198,8 @@ public static class Downloader
         return response;
     }
 
-    private static Task ApplyMetadataToTagLibFile(this QobuzApiService s, TagLib.File track, string trackId, byte[] albumArt, bool embedArt, string lyrics = "", CancellationToken token = default)
+    private static void ApplyMetadataToTagLibFile(TagLib.File track, Track page, Album albumPage, byte[] albumArt, bool embedArt, string lyrics = "")
     {
-        var page = s.GetTrack(trackId, true);
-        var albumPage = s.GetAlbum(page.Album.Id, true);
 
         track.Tag.Title = page.CompleteTitle;
         track.Tag.Album = albumPage.CompleteTitle;
@@ -218,7 +220,5 @@ public static class Downloader
         track.Tag.Lyrics = lyrics;
 
         track.Save();
-
-        return Task.CompletedTask;
     }
 }

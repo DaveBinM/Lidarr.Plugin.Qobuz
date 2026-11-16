@@ -8,6 +8,7 @@ using NLog;
 using NzbDrone.Core.Exceptions;
 using NzbDrone.Core.Parser.Model;
 using NzbDrone.Common.Instrumentation.Extensions;
+using NzbDrone.Plugin.Qobuz.API;
 
 namespace NzbDrone.Core.Download.Clients.Qobuz.Queue
 {
@@ -18,6 +19,7 @@ namespace NzbDrone.Core.Download.Clients.Qobuz.Queue
         private readonly Dictionary<DownloadItem, CancellationTokenSource> _cancellationSources;
 
         private readonly List<Task> _runningTasks = new();
+        private int _activeAlbums;
         private readonly object _lock = new();
 
         private QobuzSettings _settings;
@@ -38,7 +40,15 @@ namespace NzbDrone.Core.Download.Clients.Qobuz.Queue
             _completedHandler = completedHandler;
         }
 
-        public void SetSettings(QobuzSettings settings) => _settings = settings;
+        public void SetSettings(QobuzSettings settings)
+        {
+            _settings = settings;
+            if (settings != null)
+                QobuzThrottle.MinInterval = TimeSpan.FromMilliseconds(Math.Max(0, settings.ApiRequestIntervalMs));
+        }
+
+        // Read on every loop so a settings change applies without restarting Lidarr.
+        private int MaxConcurrentAlbums => Math.Max(1, _settings?.MaxConcurrentAlbums ?? 1);
 
         public void StartQueueHandler()
         {
@@ -47,7 +57,8 @@ namespace NzbDrone.Core.Download.Clients.Qobuz.Queue
 
         private async Task BackgroundProcessing(CancellationToken stoppingToken = default)
         {
-            using SemaphoreSlim semaphore = new(3, 3);
+            // Released by each finished album, so the loop below wakes as soon as a slot frees up.
+            using SemaphoreSlim slotFreed = new(0);
 
             async Task HandleTask(DownloadItem item, Task task)
             {
@@ -67,22 +78,34 @@ namespace NzbDrone.Core.Download.Clients.Qobuz.Queue
                 }
                 finally
                 {
-                    semaphore.Release();
-                    lock (_lock)
-                        _runningTasks.Remove(task);
+                    Interlocked.Decrement(ref _activeAlbums);
+                    slotFreed.Release();
                 }
             }
 
             while (!stoppingToken.IsCancellationRequested)
             {
-                await semaphore.WaitAsync(stoppingToken);
+                while (true)
+                {
+                    lock (_lock)
+                        _runningTasks.RemoveAll(t => t.IsCompleted);
+
+                    if (Volatile.Read(ref _activeAlbums) < MaxConcurrentAlbums)
+                        break;
+
+                    // The timeout is a backstop; a finishing album normally wakes this immediately.
+                    await slotFreed.WaitAsync(TimeSpan.FromSeconds(5), stoppingToken);
+                }
 
                 var item = await DequeueAsync(stoppingToken);
                 var token = GetTokenForItem(item);
+                // Counted before the download starts, so a fast-finishing album can't decrement first.
+                Interlocked.Increment(ref _activeAlbums);
                 var downloadTask = item.DoDownload(_settings, _logger, _completedHandler, token);
+                var handler = HandleTask(item, downloadTask);
 
                 lock (_lock)
-                    _runningTasks.Add(HandleTask(item, downloadTask));
+                    _runningTasks.Add(handler);
             }
 
             List<Task> remainingTasks;
