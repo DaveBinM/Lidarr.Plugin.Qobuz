@@ -64,7 +64,7 @@ namespace NzbDrone.Core.Download.Clients.Qobuz.Queue
 
         public float Progress { get => DownloadedSize / (float)Math.Max(TotalSize, 1); }
 
-        // Backed by fields and mutated with Interlocked because up to 3 track tasks update these
+        // Backed by fields and mutated with Interlocked because several track tasks update these
         // concurrently; a lost ++ here can wrongly mark an incomplete album as Completed.
         private long _downloadedSize;
         public long DownloadedSize => Interlocked.Read(ref _downloadedSize);
@@ -94,7 +94,10 @@ namespace NzbDrone.Core.Download.Clients.Qobuz.Queue
             }
 
             List<Task> tasks = new();
-            using SemaphoreSlim semaphore = new(3, 3);
+            var maxTracks = Math.Max(1, settings.MaxConcurrentTracks);
+            var trackDelay = TimeSpan.FromSeconds(Math.Max(0, settings.TrackDelaySeconds));
+            var rateLimitCooldown = TimeSpan.FromSeconds(Math.Max(1, settings.RateLimitCooldownSeconds));
+            using SemaphoreSlim semaphore = new(maxTracks, maxTracks);
             foreach (var track in _tracks)
             {
                 tasks.Add(Task.Run(async () =>
@@ -149,6 +152,15 @@ namespace NzbDrone.Core.Download.Clients.Qobuz.Queue
                                     logger.Warn("Qobuz track {0} ({1}) returned 404 at quality {2}.", track.Id, track.Title, quality);
                                     break; // try next quality tier
                                 }
+                                catch (Exception ex) when (attempt < maxRetries && QobuzThrottle.IsRateLimited(ex))
+                                {
+                                    // Qobuz said slow down: pause every Qobuz call (not just this track),
+                                    // longer on each repeat, before retrying.
+                                    var cooldown = rateLimitCooldown * attempt;
+                                    logger.Warn("Qobuz rate-limited track {0} ({1}) (attempt {2}/{3}); pausing all Qobuz requests for {4}s.", track.Id, track.Title, attempt, maxRetries, (int)cooldown.TotalSeconds);
+                                    QobuzThrottle.BackOff(cooldown);
+                                    await Task.Delay(cooldown, cancellation);
+                                }
                                 catch (Exception ex) when (attempt < maxRetries)
                                 {
                                     logger.Warn("Qobuz track {0} ({1}) failed (attempt {2}/{3}): {4}. Retrying...", track.Id, track.Title, attempt, maxRetries, ex.Message);
@@ -156,6 +168,9 @@ namespace NzbDrone.Core.Download.Clients.Qobuz.Queue
                                 }
                                 catch (Exception ex)
                                 {
+                                    if (QobuzThrottle.IsRateLimited(ex))
+                                        QobuzThrottle.BackOff(rateLimitCooldown * maxRetries);
+
                                     logger.Error("Qobuz track {0} ({1}) failed after {2} attempts: {3}", track.Id, track.Title, maxRetries, ex.Message);
                                     Interlocked.Increment(ref _failedTracks);
                                     downloaded = true; // stop trying further qualities
@@ -174,6 +189,13 @@ namespace NzbDrone.Core.Download.Clients.Qobuz.Queue
                     catch (TaskCanceledException) when (cancellation.IsCancellationRequested) { }
                     finally
                     {
+                        // Hold the slot for the pause so the next track on it starts after the delay.
+                        if (trackDelay > TimeSpan.Zero && !cancellation.IsCancellationRequested)
+                        {
+                            try { await Task.Delay(trackDelay, cancellation); }
+                            catch (TaskCanceledException) { }
+                        }
+
                         semaphore.Release();
                     }
                 }, cancellation));
@@ -226,6 +248,7 @@ namespace NzbDrone.Core.Download.Clients.Qobuz.Queue
 
         private async Task DoTrackDownload(string track, AudioQuality bitrate, QobuzSettings settings, CancellationToken cancellation = default)
         {
+            await QobuzThrottle.WaitAsync(cancellation);
             var page = QobuzAPI.Instance.Client.GetTrack(track, true);
             var songTitle = page.CompleteTitle;
             var artistName = page.Performer.Name;
@@ -265,7 +288,7 @@ namespace NzbDrone.Core.Download.Clients.Qobuz.Queue
             }
 
             var embedArt = (QobuzArtworkPlacement)settings.ArtworkPlacement != QobuzArtworkPlacement.Sidecar;
-            await QobuzAPI.Instance.Client.ApplyMetadataToFile(track, outPath, _albumArt, embedArt, plainLyrics, token: cancellation);
+            await Downloader.ApplyMetadataToFile(page, _qobuzAlbum, outPath, _albumArt, embedArt, plainLyrics);
 
             if (!string.IsNullOrWhiteSpace(syncLyrics))
                 await CreateLrcFile(Path.Combine(outDir, MetadataUtilities.GetFilledTemplate("%volume% - %track% - %title%.%ext%", "lrc", page, _qobuzAlbum)), syncLyrics);
@@ -289,6 +312,7 @@ namespace NzbDrone.Core.Download.Clients.Qobuz.Queue
             if (_qobuzUrl.EntityType != EntityType.Album)
                 throw new InvalidOperationException();
 
+            await QobuzThrottle.WaitAsync(cancellation);
             var album = QobuzAPI.Instance.Client.GetAlbum(_qobuzUrl.Id, true);
             _tracks ??= album.Tracks.Items.ToArray();
 

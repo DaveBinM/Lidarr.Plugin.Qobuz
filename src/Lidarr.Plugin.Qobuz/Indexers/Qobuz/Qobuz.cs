@@ -22,7 +22,9 @@ namespace NzbDrone.Core.Indexers.Qobuz
         public override bool SupportsRss => false;
         public override bool SupportsSearch => true;
         public override int PageSize => 100;
-        public override TimeSpan RateLimit => new TimeSpan(0);
+        // Lidarr spaces requests to one indexer by this. Upstream set it to zero, which let a backlog
+        // search fire every page and fallback query back to back.
+        public override TimeSpan RateLimit => TimeSpan.FromSeconds(Math.Max(0, Settings?.SearchRequestDelaySeconds ?? 3));
 
         private readonly IQobuzProxy _qobuzProxy;
         private readonly IArtistService _artistService;

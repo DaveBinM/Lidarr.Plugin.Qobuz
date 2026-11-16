@@ -11,6 +11,11 @@ namespace NzbDrone.Core.Download.Clients.Qobuz
         public QobuzSettingsValidator()
         {
             RuleFor(x => x.DownloadPath).IsValidPath();
+            RuleFor(x => x.MaxConcurrentAlbums).InclusiveBetween(1, 10);
+            RuleFor(x => x.MaxConcurrentTracks).InclusiveBetween(1, 10);
+            RuleFor(x => x.TrackDelaySeconds).InclusiveBetween(0, 600);
+            RuleFor(x => x.ApiRequestIntervalMs).InclusiveBetween(0, 60000);
+            RuleFor(x => x.RateLimitCooldownSeconds).InclusiveBetween(1, 3600);
             RuleFor(x => x.CompletedDownloadDirectory).IsValidPath().When(x => !string.IsNullOrWhiteSpace(x.CompletedDownloadDirectory));
         }
     }
@@ -48,6 +53,21 @@ namespace NzbDrone.Core.Download.Clients.Qobuz
 
         [FieldDefinition(11, Label = "Artwork Placement", Type = FieldType.Select, SelectOptions = typeof(QobuzArtworkPlacement), HelpText = "Embed the cover in each track, write a cover.jpg sidecar in the album folder, or both.")]
         public int ArtworkPlacement { get; set; } = (int)QobuzArtworkPlacement.Embed;
+
+        [FieldDefinition(12, Label = "Max Concurrent Albums", Type = FieldType.Number, HelpText = "How many albums download at the same time. Higher is faster but looks less like a normal listener to Qobuz.")]
+        public int MaxConcurrentAlbums { get; set; } = 1;
+
+        [FieldDefinition(13, Label = "Max Concurrent Tracks", Type = FieldType.Number, HelpText = "How many tracks of one album download at the same time.")]
+        public int MaxConcurrentTracks { get; set; } = 2;
+
+        [FieldDefinition(14, Label = "Delay Between Tracks", Type = FieldType.Number, Unit = "seconds", HelpText = "Pause after each track before that download slot starts the next one. 0 disables.")]
+        public int TrackDelaySeconds { get; set; } = 2;
+
+        [FieldDefinition(15, Label = "API Request Interval", Type = FieldType.Number, Unit = "ms", Advanced = true, HelpText = "Minimum gap between Qobuz API calls (album/track lookups, file URLs), shared by every download and the indexer's album lookups.")]
+        public int ApiRequestIntervalMs { get; set; } = 1000;
+
+        [FieldDefinition(16, Label = "Rate-Limit Cooldown", Type = FieldType.Number, Unit = "seconds", Advanced = true, HelpText = "When Qobuz answers 429 Too Many Requests, pause all Qobuz requests for this long (multiplied by the retry attempt) before retrying.")]
+        public int RateLimitCooldownSeconds { get; set; } = 60;
 
         public NzbDroneValidationResult Validate()
         {

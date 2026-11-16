@@ -120,6 +120,7 @@ namespace NzbDrone.Core.Indexers.Qobuz
             {
                 try
                 {
+                    QobuzThrottle.Wait();
                     var detail = QobuzAPI.Instance?.Client?.GetAlbum(a.Id, true);
                     if (detail?.ReleaseType != null)
                         result[a.Id] = detail.ReleaseType;
